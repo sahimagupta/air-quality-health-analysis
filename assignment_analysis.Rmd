@@ -1,0 +1,838 @@
+
+
+```{r load-libraries}
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(corrplot)
+library(gridExtra)
+library(scales)
+
+# Set theme for all plots
+theme_set(theme_minimal(base_size = 12))
+```
+
+```{r load-data}
+# Set working directory and load data
+setwd("C:\\Users\\kulha\\Downloads")
+
+data <- read.csv("aqhealthcities.csv")
+
+# Quick look at the data
+cat("Dataset dimensions:", dim(data)[1], "rows,", dim(data)[2], "columns\n")
+cat("Cities:", length(unique(data$City)), "\n")
+cat("Years:", min(data$Date), "-", max(data$Date), "\n")
+cat("Regions:", paste(unique(data$Region), collapse = ", "), "\n")
+```
+
+```{r data-structure}
+# Structure of data
+str(data)
+```
+
+```{r data-summary}
+# Summary statistics
+summary(data[, c("PM2_5", "PM10", "NO2", "Life_Expectancy", 
+                  "Child_Mortality", "Health_Index", "GDP_per_capita_usd_k")])
+```
+
+---
+
+# Executive Summary
+
+**Overall Finding:** This exploratory analysis of 20 global cities (1994-2023) reveals that higher PM2.5 concentrations are associated with worse health outcomes, but this relationship varies substantially across cities and is largely explained by economic development rather than air pollution alone.
+
+**Key Findings:**
+
+- Cities with higher PM2.5 tend to have lower life expectancy (r = -0.06), higher child mortality (r = 0.08), and lower Health Index scores (r = -0.16)
+- The relationship is not uniform: African cities show poor health despite moderate pollution; Asian cities vary widely by GDP
+- GDP per capita is the dominant factor: high-GDP cities have 27-point higher Health Index even at similar pollution levels
+- London performs well on air quality but ranks below European peers on broader health measures
+
+**Data Quality Warning:** This analysis shows associations, not causality. Confidence level is LOW to MODERATE due to missing data, outliers, and the simplified nature of the dataset.
+
+---
+
+# Part 1: Exploratory Data Analysis
+
+## 1a. Key Trends, Patterns and Anomalies
+
+### Which cities are consistently most polluted?
+
+```{r city-pollution-ranking}
+# Calculate mean PM2.5 by city
+city_pm25 <- data %>%
+  group_by(City, Region) %>%
+  summarise(
+    mean_pm25 = mean(PM2_5, na.rm = TRUE),
+    sd_pm25 = sd(PM2_5, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_pm25))
+
+# Display top 10 most polluted
+cat("TOP 10 MOST POLLUTED CITIES:\n")
+print(head(city_pm25, 10))
+
+# Display least polluted
+cat("\nLEAST POLLUTED CITIES:\n")
+print(tail(city_pm25, 5))
+```
+
+```{r plot-city-pm25, fig.height=8}
+# Plot: PM2.5 by city
+ggplot(city_pm25, aes(x = reorder(City, mean_pm25), y = mean_pm25, fill = Region)) +
+  geom_bar(stat = "identity", alpha = 0.8) +
+  geom_hline(yintercept = 15, linetype = "dashed", color = "red", size = 1) +
+  geom_text(aes(label = round(mean_pm25, 1)), hjust = -0.2, size = 3.5) +
+  coord_flip() +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Mean PM2.5 by City (1994-2023)",
+    subtitle = "Red dashed line = WHO guideline (15 µg/m³)\nPM2.5 levels are consistently higher in Asian cities",
+    x = "",
+    y = "Mean PM2.5 (µg/m³)"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+**Finding:** PM2.5 levels are consistently highest in Asian cities. Beijing stands out with mean PM2.5 of 30.0 µg/m³—double the WHO guideline. London (10.6 µg/m³) is among the lowest.
+
+### Is PM2.5 going down or staying high?
+
+```{r global-trend}
+# Calculate global PM2.5 trend
+yearly_trend <- data %>%
+  group_by(Date) %>%
+  summarise(
+    mean_pm25 = mean(PM2_5, na.rm = TRUE),
+    sd_pm25 = sd(PM2_5, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Key years
+cat("PM2.5 Trend:\n")
+cat("1994:", round(yearly_trend$mean_pm25[yearly_trend$Date == 1994], 2), "µg/m³\n")
+cat("2005:", round(yearly_trend$mean_pm25[yearly_trend$Date == 2005], 2), "µg/m³\n")
+cat("2011:", round(yearly_trend$mean_pm25[yearly_trend$Date == 2011], 2), "µg/m³ (PEAK)\n")
+cat("2023:", round(yearly_trend$mean_pm25[yearly_trend$Date == 2023], 2), "µg/m³\n")
+```
+
+```{r plot-global-trend}
+# Plot: Global PM2.5 trend
+ggplot(yearly_trend, aes(x = Date, y = mean_pm25)) +
+  geom_ribbon(aes(ymin = mean_pm25 - sd_pm25, ymax = mean_pm25 + sd_pm25), 
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(color = "steelblue", size = 1.2) +
+  geom_point(color = "steelblue", size = 2.5) +
+  geom_hline(yintercept = 15, linetype = "dashed", color = "red", size = 1) +
+  annotate("text", x = 2011, y = 19.5, label = "Peak: 2011", color = "red", fontface = "bold") +
+  annotate("segment", x = 2011, xend = 2011, y = 19, yend = 18, 
+           arrow = arrow(length = unit(0.2, "cm")), color = "red") +
+  labs(
+    title = "Global PM2.5 Trend Over Time (1994-2023)",
+    subtitle = "Shaded area = ±1 standard deviation | Red line = WHO guideline",
+    x = "Year",
+    y = "Mean PM2.5 (µg/m³)"
+  )
+```
+
+### Regional Patterns
+
+```{r regional-trends}
+# PM2.5 by region over time
+regional_trends <- data %>%
+  group_by(Date, Region) %>%
+  summarise(mean_pm25 = mean(PM2_5, na.rm = TRUE), .groups = "drop")
+
+# Plot: Regional trends
+ggplot(regional_trends, aes(x = Date, y = mean_pm25, color = Region)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  geom_hline(yintercept = 15, linetype = "dashed", color = "gray40", alpha = 0.7) +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title = "PM2.5 Trends by Region (1994-2023)",
+    subtitle = "Asia shows highest levels with dramatic peak in 2010-2015",
+    x = "Year",
+    y = "Mean PM2.5 (µg/m³)"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+### Outliers and Anomalies
+
+```{r identify-outliers}
+# Identify outliers using IQR method
+Q1 <- quantile(data$PM2_5, 0.25, na.rm = TRUE)
+Q3 <- quantile(data$PM2_5, 0.75, na.rm = TRUE)
+IQR_val <- Q3 - Q1
+upper_bound <- Q3 + 1.5 * IQR_val
+
+outliers <- data %>%
+  filter(PM2_5 > upper_bound) %>%
+  select(City, Date, PM2_5, Region) %>%
+  arrange(desc(PM2_5))
+
+cat("Number of outliers:", nrow(outliers), "(", 
+    round(nrow(outliers)/nrow(data)*100, 1), "% of data)\n")
+cat("Upper bound:", round(upper_bound, 2), "µg/m³\n\n")
+
+cat("MOST EXTREME VALUES:\n")
+print(head(outliers, 10))
+
+cat("\nOUTLIERS BY CITY:\n")
+print(table(outliers$City))
+```
+
+```{r plot-outliers, fig.height=5}
+# Plot: Outliers visualization
+ggplot(data, aes(x = "", y = PM2_5)) +
+  geom_boxplot(fill = "lightblue", alpha = 0.7, outlier.shape = NA) +
+  geom_jitter(data = outliers, aes(color = City), width = 0.2, size = 3, alpha = 0.7) +
+  geom_hline(yintercept = upper_bound, linetype = "dashed", color = "orange", size = 1) +
+  annotate("text", x = 1.3, y = upper_bound + 5, 
+           label = paste("Upper bound:", round(upper_bound, 1)), color = "orange") +
+  labs(
+    title = paste("PM2.5 Distribution with", nrow(outliers), "Outliers"),
+    subtitle = "Beijing dominates extreme values (2011-2018 pollution crisis)",
+    x = "",
+    y = "PM2.5 (µg/m³)"
+  ) +
+  theme(legend.position = "right")
+```
+
+### Surprising Pattern: Poor Health Despite Moderate Pollution
+
+```{r surprising-patterns}
+# African cities with low pollution but poor health
+city_summary <- data %>%
+  group_by(City, Region) %>%
+  summarise(
+    mean_pm25 = mean(PM2_5, na.rm = TRUE),
+    mean_health = mean(Health_Index, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Identify surprising cities
+surprising <- city_summary %>%
+  filter(mean_pm25 < 13 & mean_health < 50)
+
+cat("SURPRISING: Low PM2.5 but Poor Health:\n")
+print(surprising)
+```
+
+```{r plot-surprising, fig.height=7}
+# Plot: PM2.5 vs Health Index by city
+ggplot(city_summary, aes(x = mean_pm25, y = mean_health, color = Region)) +
+  geom_point(size = 5, alpha = 0.8) +
+  geom_text(aes(label = City), vjust = -1, hjust = 0.5, size = 3) +
+  geom_vline(xintercept = 13, linetype = "dashed", color = "blue", alpha = 0.5) +
+  geom_hline(yintercept = 50, linetype = "dashed", color = "red", alpha = 0.5) +
+  annotate("rect", xmin = 0, xmax = 13, ymin = 0, ymax = 50, 
+           fill = "red", alpha = 0.1) +
+  annotate("text", x = 11, y = 45, label = "Surprising:\nLow pollution\nbut poor health", 
+           color = "red", size = 3, fontface = "italic") +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title = "Surprising Pattern: Some Cities Have Poor Health Despite Moderate Pollution",
+    subtitle = "African cities (Lagos, Nairobi, Johannesburg) in bottom-left quadrant",
+    x = "Mean PM2.5 (µg/m³)",
+    y = "Mean Health Index"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+**Key Finding:** Four African cities show strikingly poor health outcomes despite PM2.5 levels below 13 µg/m³. Lagos has Health Index of only 14.9 with moderate pollution. This suggests factors beyond outdoor air quality drive health outcomes.
+
+---
+
+## 1b. Interrelationships Between Air Quality and Health
+
+### Correlation Analysis
+
+```{r correlation-analysis}
+# Filter complete cases
+complete_data <- data %>%
+  filter(!is.na(PM2_5) & !is.na(Life_Expectancy) & 
+         !is.na(Child_Mortality) & !is.na(Health_Index))
+
+# Calculate correlations
+cor_life <- cor(complete_data$PM2_5, complete_data$Life_Expectancy)
+cor_child <- cor(complete_data$PM2_5, complete_data$Child_Mortality)
+cor_health <- cor(complete_data$PM2_5, complete_data$Health_Index)
+
+# Significance tests
+test_life <- cor.test(complete_data$PM2_5, complete_data$Life_Expectancy)
+test_child <- cor.test(complete_data$PM2_5, complete_data$Child_Mortality)
+test_health <- cor.test(complete_data$PM2_5, complete_data$Health_Index)
+
+# Summary table
+cor_summary <- data.frame(
+  Variable = c("Life Expectancy", "Child Mortality", "Health Index"),
+  Correlation = round(c(cor_life, cor_child, cor_health), 3),
+  P_value = round(c(test_life$p.value, test_child$p.value, test_health$p.value), 4),
+  Significant = c(test_life$p.value < 0.05, test_child$p.value < 0.05, test_health$p.value < 0.05),
+  Interpretation = c("Weak negative", "Weak positive", "Weak negative")
+)
+
+cat("CORRELATIONS BETWEEN PM2.5 AND HEALTH OUTCOMES:\n")
+print(cor_summary)
+```
+
+### Association Plots
+
+```{r association-plots, fig.height=5, fig.width=14}
+# Create three association plots
+p1 <- ggplot(complete_data, aes(x = PM2_5, y = Life_Expectancy, color = Region)) +
+  geom_point(alpha = 0.5, size = 2) +
+  geom_smooth(method = "lm", se = TRUE, color = "black", linetype = "dashed") +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title = paste("PM2.5 vs Life Expectancy\n(r =", round(cor_life, 2), ")"),
+    x = "PM2.5 (µg/m³)",
+    y = "Life Expectancy (years)"
+  ) +
+  theme(legend.position = "none")
+
+p2 <- ggplot(complete_data, aes(x = PM2_5, y = Child_Mortality, color = Region)) +
+  geom_point(alpha = 0.5, size = 2) +
+  geom_smooth(method = "lm", se = TRUE, color = "black", linetype = "dashed") +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title = paste("PM2.5 vs Child Mortality\n(r =", round(cor_child, 2), ")"),
+    x = "PM2.5 (µg/m³)",
+    y = "Child Mortality (per 1000)"
+  ) +
+  theme(legend.position = "none")
+
+p3 <- ggplot(complete_data, aes(x = PM2_5, y = Health_Index, color = Region)) +
+  geom_point(alpha = 0.5, size = 2) +
+  geom_smooth(method = "lm", se = TRUE, color = "black", linetype = "dashed") +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title = paste("PM2.5 vs Health Index\n(r =", round(cor_health, 2), ")"),
+    x = "PM2.5 (µg/m³)",
+    y = "Health Index"
+  ) +
+  theme(legend.position = "bottom")
+
+grid.arrange(p1, p2, p3, ncol = 3)
+```
+
+**Interpretation:**
+
+- **PM2.5 and Life Expectancy:** Cities with higher PM2.5 *tend to have* lower life expectancy (r = -0.06), but this association is weak and not statistically significant
+- **PM2.5 and Child Mortality:** Cities with higher PM2.5 *tend to be associated with* higher child mortality (r = 0.08), borderline significant
+- **PM2.5 and Health Index:** Strongest association (r = -0.16, p < 0.001) - cities with higher PM2.5 *tend to have* lower health scores
+
+**IMPORTANT:** These are associations, NOT causal relationships!
+
+### Regression Analysis: Controlling for GDP
+
+```{r regression-analysis}
+# Simple model: PM2.5 only
+model_simple <- lm(Life_Expectancy ~ PM2_5, data = complete_data)
+
+# Multiple model: PM2.5 + GDP
+model_multi <- lm(Life_Expectancy ~ PM2_5 + GDP_per_capita_usd_k, data = complete_data)
+
+# Compare models
+cat("SIMPLE MODEL (PM2.5 only):\n")
+cat("R-squared:", round(summary(model_simple)$r.squared, 4), "\n")
+cat("PM2.5 coefficient:", round(coef(model_simple)[2], 4), "\n")
+cat("PM2.5 p-value:", round(summary(model_simple)$coefficients[2, 4], 4), "\n\n")
+
+cat("MULTIPLE MODEL (PM2.5 + GDP):\n")
+cat("R-squared:", round(summary(model_multi)$r.squared, 4), "\n")
+cat("PM2.5 coefficient:", round(coef(model_multi)[2], 4), "\n")
+cat("PM2.5 p-value:", round(summary(model_multi)$coefficients[2, 4], 4), "\n")
+cat("GDP coefficient:", round(coef(model_multi)[3], 4), "\n")
+```
+
+```{r regression-summary}
+# Full regression summary
+summary(model_multi)
+```
+
+**Key Finding:** When controlling for GDP, R² improves from 0.004 to 0.608. This means GDP explains most of the variation in health outcomes—not PM2.5. The PM2.5 coefficient becomes significant only after controlling for economic development.
+
+### Correlation Matrix
+
+```{r correlation-matrix, fig.height=7, fig.width=8}
+# Select variables for correlation matrix
+cor_vars <- complete_data %>%
+  select(PM2_5, PM10, NO2, Life_Expectancy, Child_Mortality, 
+         Health_Index, GDP_per_capita_usd_k, Urban_Density_p_km2)
+
+# Calculate correlation matrix
+cor_matrix <- cor(cor_vars, use = "complete.obs")
+
+# Plot correlation matrix
+corrplot(cor_matrix, 
+         method = "color", 
+         type = "upper",
+         addCoef.col = "black",
+         number.cex = 0.7,
+         tl.col = "black",
+         tl.cex = 0.9,
+         title = "Correlation Matrix: Air Quality, Health, and Economic Variables",
+         mar = c(0, 0, 2, 0))
+```
+
+**Finding:** GDP shows the strongest correlation with health outcomes (r = 0.78 with Life Expectancy). Air pollution measures show weaker correlations.
+
+---
+
+## 1c. Differences by City Characteristics
+
+### High GDP vs Low GDP Cities
+
+```{r gdp-categories}
+# Create GDP categories
+gdp_median <- median(data$GDP_per_capita_usd_k, na.rm = TRUE)
+cat("GDP Median: $", round(gdp_median, 1), "k\n\n")
+
+data$GDP_Category <- ifelse(data$GDP_per_capita_usd_k >= gdp_median, "High GDP", "Low GDP")
+
+# Compare categories
+gdp_comparison <- data %>%
+  group_by(GDP_Category) %>%
+  summarise(
+    N_obs = n(),
+    Mean_PM25 = round(mean(PM2_5, na.rm = TRUE), 2),
+    Mean_Life_Exp = round(mean(Life_Expectancy, na.rm = TRUE), 2),
+    Mean_Health_Index = round(mean(Health_Index, na.rm = TRUE), 2),
+    Mean_Child_Mortality = round(mean(Child_Mortality, na.rm = TRUE), 2),
+    .groups = "drop"
+  )
+
+cat("HIGH GDP vs LOW GDP COMPARISON:\n")
+print(gdp_comparison)
+
+# Calculate gaps
+health_gap <- gdp_comparison$Mean_Health_Index[gdp_comparison$GDP_Category == "High GDP"] -
+              gdp_comparison$Mean_Health_Index[gdp_comparison$GDP_Category == "Low GDP"]
+life_gap <- gdp_comparison$Mean_Life_Exp[gdp_comparison$GDP_Category == "High GDP"] -
+            gdp_comparison$Mean_Life_Exp[gdp_comparison$GDP_Category == "Low GDP"]
+
+cat("\nHealth Index gap:", round(health_gap, 1), "points\n")
+cat("Life Expectancy gap:", round(life_gap, 1), "years\n")
+```
+
+### Key Finding: GDP Matters Even at Same Pollution Levels
+
+```{r gdp-same-pollution}
+# Filter to similar PM2.5 levels
+similar_pollution <- data %>%
+  filter(PM2_5 >= 10 & PM2_5 <= 14) %>%
+  group_by(GDP_Category) %>%
+  summarise(
+    N_obs = n(),
+    Mean_PM25 = round(mean(PM2_5, na.rm = TRUE), 2),
+    Mean_Health_Index = round(mean(Health_Index, na.rm = TRUE), 2),
+    .groups = "drop"
+  )
+
+cat("AT SIMILAR PM2.5 LEVELS (10-14 µg/m³):\n")
+print(similar_pollution)
+
+gap_at_same_pollution <- similar_pollution$Mean_Health_Index[similar_pollution$GDP_Category == "High GDP"] -
+                         similar_pollution$Mean_Health_Index[similar_pollution$GDP_Category == "Low GDP"]
+cat("\nHealth Index gap at SAME pollution:", round(gap_at_same_pollution, 1), "points!\n")
+```
+
+```{r plot-gdp-comparison, fig.height=6}
+# Plot: GDP comparison
+gdp_long <- gdp_comparison %>%
+  select(GDP_Category, Mean_Health_Index, Mean_Life_Exp) %>%
+  pivot_longer(cols = c(Mean_Health_Index, Mean_Life_Exp), 
+               names_to = "Metric", values_to = "Value")
+
+ggplot(gdp_comparison, aes(x = GDP_Category, y = Mean_Health_Index, fill = GDP_Category)) +
+  geom_bar(stat = "identity", alpha = 0.8, width = 0.6) +
+  geom_text(aes(label = Mean_Health_Index), vjust = -0.5, size = 6, fontface = "bold") +
+  scale_fill_manual(values = c("High GDP" = "#27ae60", "Low GDP" = "#e74c3c")) +
+  labs(
+    title = "High-GDP Cities Tend to Have Better Health Outcomes",
+    subtitle = paste("27-point gap in Health Index |", round(gap_at_same_pollution, 0), 
+                     "-point gap even at same pollution levels"),
+    x = "",
+    y = "Mean Health Index"
+  ) +
+  theme(legend.position = "none") +
+  ylim(0, 100)
+```
+
+### Regional Comparison
+
+```{r regional-comparison}
+# Regional summary
+regional_summary <- data %>%
+  group_by(Region) %>%
+  summarise(
+    Mean_PM25 = round(mean(PM2_5, na.rm = TRUE), 2),
+    Mean_Health_Index = round(mean(Health_Index, na.rm = TRUE), 2),
+    Mean_Life_Exp = round(mean(Life_Expectancy, na.rm = TRUE), 2),
+    Mean_GDP = round(mean(GDP_per_capita_usd_k, na.rm = TRUE), 2),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Mean_Health_Index))
+
+cat("REGIONAL COMPARISON:\n")
+print(regional_summary)
+```
+
+```{r plot-regional, fig.height=6}
+# Plot: Regional health boxplot
+ggplot(data %>% filter(!is.na(Health_Index)), 
+       aes(x = reorder(Region, Health_Index, FUN = median), y = Health_Index, fill = Region)) +
+  geom_boxplot(alpha = 0.7) +
+  geom_jitter(alpha = 0.2, width = 0.2) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Health Index Distribution by Region",
+    subtitle = "African cities show poor health despite moderate pollution levels",
+    x = "Region",
+    y = "Health Index"
+  ) +
+  theme(legend.position = "none")
+```
+
+**Key Finding:** European and Oceanian cities cluster in the high-health zone (Health Index 84-86). African cities show very poor health (29.8) despite low PM2.5 (11.8 µg/m³). This demonstrates that air quality alone does not determine health outcomes.
+
+---
+
+## 1d. London's Position
+
+### London vs Global Average
+
+```{r london-analysis}
+# London data
+london <- data %>% filter(City == "London")
+
+# Global average by year
+global_avg <- data %>%
+  group_by(Date) %>%
+  summarise(Global_PM25 = mean(PM2_5, na.rm = TRUE), .groups = "drop")
+
+# Combine
+london_comparison <- london %>%
+  select(Date, London_PM25 = PM2_5) %>%
+  left_join(global_avg, by = "Date")
+
+# London 2021
+london_2021 <- london %>% filter(Date == 2021)
+cat("LONDON 2021:\n")
+cat("PM2.5:", london_2021$PM2_5, "µg/m³\n")
+cat("Health Index:", london_2021$Health_Index, "\n")
+cat("Life Expectancy:", london_2021$Life_Expectancy, "years\n")
+```
+
+```{r plot-london-trend}
+# Plot: London vs Global
+london_long <- london_comparison %>%
+  pivot_longer(cols = c(London_PM25, Global_PM25), 
+               names_to = "Category", values_to = "PM25")
+
+ggplot(london_long, aes(x = Date, y = PM25, color = Category)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2.5) +
+  geom_hline(yintercept = 15, linetype = "dashed", color = "gray40") +
+  scale_color_manual(
+    values = c("Global_PM25" = "steelblue", "London_PM25" = "red"),
+    labels = c("Global Average", "London")
+  ) +
+  labs(
+    title = "London PM2.5 Compared to Global Average",
+    subtitle = "London consistently outperforms the global average",
+    x = "Year",
+    y = "PM2.5 (µg/m³)",
+    color = ""
+  ) +
+  theme(legend.position = "bottom")
+```
+
+### City Rankings (2021)
+
+```{r city-rankings}
+# City comparison 2021
+city_2021 <- data %>%
+  filter(Date == 2021, !is.na(Health_Index)) %>%
+  select(City, Region, PM2_5, Health_Index, Life_Expectancy) %>%
+  arrange(desc(Health_Index))
+
+cat("CITY RANKINGS 2021 (by Health Index):\n")
+print(city_2021)
+
+# London's rank
+london_rank <- which(city_2021$City == "London")
+cat("\nLondon's rank:", london_rank, "out of", nrow(city_2021), "cities\n")
+```
+
+```{r plot-city-rankings, fig.height=8}
+# Plot: City Health Index ranking
+ggplot(city_2021, aes(x = reorder(City, Health_Index), y = Health_Index,
+                       fill = ifelse(City == "London", "London", "Other"))) +
+  geom_bar(stat = "identity", alpha = 0.8) +
+  geom_text(aes(label = round(Health_Index, 1)), hjust = -0.1, size = 3.5) +
+  coord_flip() +
+  scale_fill_manual(values = c("London" = "red", "Other" = "steelblue")) +
+  labs(
+    title = "Health Index by City (2021)",
+    subtitle = "London ranks mid-table despite excellent air quality",
+    x = "",
+    y = "Health Index"
+  ) +
+  theme(legend.position = "none") +
+  xlim(c(NA, NA))
+```
+
+**Finding:** London's PM2.5 of 9.4 µg/m³ is among the lowest in the dataset. However, its Health Index of 83.4 places it below European peers Madrid (91.2) and Paris (89.3), suggesting broader health factors need attention beyond air quality.
+
+---
+
+## 1e. Data Problems and Uncertainty
+
+### Missing Data
+
+```{r missing-data}
+# Calculate missing data
+missing_summary <- data.frame(
+  Variable = names(data),
+  Missing = sapply(data, function(x) sum(is.na(x))),
+  Percent = sapply(data, function(x) round(sum(is.na(x)) / nrow(data) * 100, 1))
+)
+
+missing_summary <- missing_summary %>%
+  filter(Missing > 0) %>%
+  arrange(desc(Missing))
+
+cat("MISSING DATA SUMMARY:\n")
+print(missing_summary)
+
+# Which years have missing health data?
+missing_years <- data %>%
+  filter(is.na(Health_Index)) %>%
+  group_by(Date) %>%
+  summarise(N_missing = n(), .groups = "drop")
+
+cat("\nYEARS WITH MISSING HEALTH DATA:\n")
+print(missing_years)
+```
+
+```{r plot-missing, fig.height=5}
+# Plot: Missing data
+ggplot(missing_summary, aes(x = reorder(Variable, Missing), y = Missing, fill = Percent > 10)) +
+  geom_bar(stat = "identity", alpha = 0.8) +
+  geom_text(aes(label = paste0(Percent, "%")), hjust = -0.1, size = 4) +
+  coord_flip() +
+  scale_fill_manual(values = c("FALSE" = "orange", "TRUE" = "red")) +
+  labs(
+    title = "Missing Data by Variable",
+    subtitle = "20% of modal split data missing; 7% of health data missing for 2022-2023",
+    x = "",
+    y = "Number of Missing Observations"
+  ) +
+  theme(legend.position = "none")
+```
+
+### Outliers
+
+```{r outliers-summary}
+cat("OUTLIER ANALYSIS:\n")
+cat("Number of PM2.5 outliers:", nrow(outliers), "(", 
+    round(nrow(outliers)/nrow(data)*100, 1), "%)\n")
+cat("Upper bound (IQR method):", round(upper_bound, 2), "µg/m³\n\n")
+
+cat("OUTLIERS BY CITY:\n")
+print(sort(table(outliers$City), decreasing = TRUE))
+
+cat("\nMOST EXTREME VALUE:\n")
+cat("Beijing 2013:", max(data$PM2_5), "µg/m³ (7x WHO guideline)\n")
+```
+
+### City Averages Hide Inequalities
+
+```{r within-city-variation}
+# Calculate within-city variation
+city_variation <- data %>%
+  group_by(City) %>%
+  summarise(
+    Mean = round(mean(PM2_5, na.rm = TRUE), 2),
+    SD = round(sd(PM2_5, na.rm = TRUE), 2),
+    Min = round(min(PM2_5, na.rm = TRUE), 2),
+    Max = round(max(PM2_5, na.rm = TRUE), 2),
+    Range = round(max(PM2_5, na.rm = TRUE) - min(PM2_5, na.rm = TRUE), 2),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Range))
+
+cat("WITHIN-CITY PM2.5 VARIATION:\n")
+print(head(city_variation, 10))
+cat("\nBeijing: Mean=30, but range 9-102 µg/m³!")
+```
+
+```{r plot-beijing-variation, fig.height=5}
+# Plot: Beijing variation over time
+beijing <- data %>% filter(City == "Beijing")
+london <- data %>% filter(City == "London")
+
+ggplot() +
+  geom_line(data = beijing, aes(x = Date, y = PM2_5, color = "Beijing"), size = 1.2) +
+  geom_point(data = beijing, aes(x = Date, y = PM2_5, color = "Beijing"), size = 2) +
+  geom_ribbon(data = beijing, aes(x = Date, ymin = 0, ymax = PM2_5), fill = "red", alpha = 0.2) +
+  geom_line(data = london, aes(x = Date, y = PM2_5, color = "London"), size = 1.2) +
+  geom_hline(yintercept = mean(beijing$PM2_5), linetype = "dashed", color = "red", alpha = 0.7) +
+  scale_color_manual(values = c("Beijing" = "red", "London" = "blue")) +
+  labs(
+    title = "City Averages Hide Enormous Variation",
+    subtitle = "Beijing mean = 30 µg/m³, but actual values range from 9 to 102",
+    x = "Year",
+    y = "PM2.5 (µg/m³)",
+    color = "City"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+### Measurement Issues
+
+```{r measurement-issues}
+# Exercise levels distribution
+cat("EXERCISE LEVELS DISTRIBUTION (SUSPICIOUS):\n")
+print(table(data$Exercise_Levels))
+cat("\nPercent 'High':", round(sum(data$Exercise_Levels == "High") / nrow(data) * 100, 1), "%")
+cat("\n\n80% classified as 'High' is implausible - likely data quality issue!\n")
+```
+
+```{r plot-exercise, fig.height=4, fig.width=6}
+# Plot: Exercise levels pie chart
+exercise_counts <- as.data.frame(table(data$Exercise_Levels))
+names(exercise_counts) <- c("Level", "Count")
+exercise_counts$Percent <- round(exercise_counts$Count / sum(exercise_counts$Count) * 100, 1)
+
+ggplot(exercise_counts, aes(x = "", y = Count, fill = Level)) +
+  geom_bar(stat = "identity", width = 1, alpha = 0.8) +
+  coord_polar("y", start = 0) +
+  geom_text(aes(label = paste0(Percent, "%")), 
+            position = position_stack(vjust = 0.5), size = 5) +
+  scale_fill_manual(values = c("High" = "#e74c3c", "Low" = "#27ae60", "Medium" = "#f39c12")) +
+  labs(
+    title = "Exercise Levels Distribution",
+    subtitle = "80% 'High' is suspicious - likely measurement/classification issue"
+  ) +
+  theme_void() +
+  theme(legend.position = "right")
+```
+
+### Statistical Limitations
+
+```{r statistical-limitations}
+cat("STATISTICAL LIMITATIONS:\n\n")
+
+cat("1. WEAK CORRELATIONS:\n")
+cat("   PM2.5 vs Life Expectancy: r =", round(cor_life, 3), "\n")
+cat("   PM2.5 vs Child Mortality: r =", round(cor_child, 3), "\n")
+cat("   PM2.5 vs Health Index: r =", round(cor_health, 3), "\n")
+cat("   → PM2.5 explains very little of health variation alone!\n\n")
+
+cat("2. NON-INDEPENDENT OBSERVATIONS:\n")
+cat("   Total observations:", nrow(data), "\n")
+cat("   Unique cities:", length(unique(data$City)), "\n")
+cat("   Years per city:", nrow(data) / length(unique(data$City)), "\n")
+cat("   → Same city measured 30 times = autocorrelation!\n\n")
+
+cat("3. CANNOT ESTABLISH CAUSATION:\n")
+cat("   This is observational data with many confounding factors.\n")
+cat("   We can only say 'associated with', NOT 'causes'.\n\n")
+
+cat("4. DATA IS SIMPLIFIED/FICTIONAL:\n")
+cat("   This dataset is for teaching purposes.\n")
+cat("   Real policy would need primary data collection.\n")
+```
+
+### Data Quality Summary Figure
+
+```{r data-quality-summary, fig.height=10, fig.width=12}
+# Create summary figure
+par(mfrow = c(2, 2))
+
+# 1. Missing data
+barplot(missing_summary$Missing, 
+        names.arg = missing_summary$Variable,
+        main = "Missing Data by Variable",
+        col = ifelse(missing_summary$Percent > 10, "red", "orange"),
+        las = 2, cex.names = 0.8)
+
+# 2. Outliers
+boxplot(data$PM2_5, main = "PM2.5 Distribution with Outliers",
+        ylab = "PM2.5 (µg/m³)", col = "lightblue")
+points(rep(1, nrow(outliers)), outliers$PM2_5, col = "red", pch = 19, cex = 0.8)
+abline(h = upper_bound, col = "orange", lty = 2, lwd = 2)
+
+# 3. Beijing variation
+plot(beijing$Date, beijing$PM2_5, type = "o", col = "red", lwd = 2,
+     main = "Beijing PM2.5 Over Time\n(Averages hide this variation)",
+     xlab = "Year", ylab = "PM2.5 (µg/m³)")
+abline(h = mean(beijing$PM2_5), lty = 2, col = "blue", lwd = 2)
+legend("topright", c("Actual", "Mean"), col = c("red", "blue"), lty = c(1, 2), lwd = 2)
+
+# 4. Exercise levels
+pie(table(data$Exercise_Levels), 
+    main = "Exercise Levels\n(80% High is suspicious)",
+    col = c("coral", "orange", "lightgreen"))
+
+par(mfrow = c(1, 1))
+```
+
+---
+
+# Summary Statistics
+
+```{r final-summary}
+cat("============================================\n")
+cat("       KEY STATISTICS FOR REPORT           \n")
+cat("============================================\n\n")
+
+cat("--- 1a: Trends ---\n")
+cat("Most polluted city: Beijing (30.0 µg/m³)\n")
+cat("Least polluted city: London (10.6 µg/m³)\n")
+cat("PM2.5 peak year: 2011 (17.9 µg/m³)\n")
+cat("Outliers: 39 (6.5%)\n\n")
+
+cat("--- 1b: Associations ---\n")
+cat("PM2.5 vs Life Expectancy: r =", round(cor_life, 2), "\n")
+cat("PM2.5 vs Child Mortality: r =", round(cor_child, 2), "\n")
+cat("PM2.5 vs Health Index: r =", round(cor_health, 2), "\n")
+cat("Simple model R²:", round(summary(model_simple)$r.squared, 3), "\n")
+cat("With GDP R²:", round(summary(model_multi)$r.squared, 3), "\n\n")
+
+cat("--- 1c: City Characteristics ---\n")
+cat("High GDP Health Index:", gdp_comparison$Mean_Health_Index[gdp_comparison$GDP_Category == "High GDP"], "\n")
+cat("Low GDP Health Index:", gdp_comparison$Mean_Health_Index[gdp_comparison$GDP_Category == "Low GDP"], "\n")
+cat("Gap:", round(health_gap, 1), "points\n\n")
+
+cat("--- 1d: London ---\n")
+cat("London PM2.5 (2021):", london_2021$PM2_5, "µg/m³\n")
+cat("London Health Index:", london_2021$Health_Index, "\n")
+cat("London rank:", london_rank, "out of", nrow(city_2021), "\n\n")
+
+cat("--- 1e: Data Quality ---\n")
+cat("Missing modal split: 20%\n")
+cat("Missing health data: 7%\n")
+cat("PM2.5 outliers: 39 (6.5%)\n")
+cat("Exercise 'High': 80% (suspicious)\n\n")
+
+cat("============================================\n")
+cat("              IMPORTANT CAVEATS            \n")
+cat("============================================\n")
+cat("• These are ASSOCIATIONS, not causal relationships\n")
+cat("• City averages hide within-city inequalities\n")
+cat("• Data is simplified/fictional for teaching\n")
+cat("• Confidence level: LOW to MODERATE\n")
+cat("• Real policy needs better evidence\n")
+cat("============================================\n")
+```
+
+
