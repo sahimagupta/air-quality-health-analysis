@@ -1,6 +1,9 @@
 # Air Quality & Health — Global Cities Analysis
 
 This was done as part of my STEP0020 module (Assignment 2). The idea was to look at how air pollution relates to health outcomes in 20 cities around the world, using data from 1994 to 2023.
+## 📌 Research Question
+
+> **Does worse air quality lead to worse health outcomes in cities, and if so, how much of that relationship is actually explained by wealth rather than pollution itself?**
 
 ## What's this about?
 
